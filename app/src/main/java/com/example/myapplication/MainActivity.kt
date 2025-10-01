@@ -36,9 +36,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PantallaControl() {
     // CAMBIA ESTA IP A LA DE TU RASPBERRY PI
-    val ipRaspberry = "10.227.197.199"
+    val ipRaspberry = "10.42.0.1"
     val puerto = "5000"
-
     var respuesta by remember { mutableStateOf("Sin conexión") }
     var conectado by remember { mutableStateOf(false) }
     val context = LocalContext.current
