@@ -22,31 +22,87 @@ import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
 
+//Version 2 Actualizacion: Para poder utilizar datos moviles mientras se esta conectado al Raspberry Pi //
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.Build
+import androidx.annotation.RequiresApi
+
 class MainActivity : ComponentActivity() {
+    //Version 2 Actualizacion: Variable para guardar referencia a la red WiFi del robot
+    var robotNetwork: Network? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        //Version 2 Actualizacion: Inicializar conexion a red del robot (Android 6+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            conectarRedRobot(this)
+        }
+
         setContent {
             MaterialTheme {
                 PantallaControl()
             }
         }
     }
+
+    //Version 2 Actualizacion: Funcion para detectar y conectar a la red WiFi del robot
+    @RequiresApi(Build.VERSION_CODES.M)
+    fun conectarRedRobot(context: Context) {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        // Solicitar red WiFi sin requerir internet
+        val networkRequest = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+
+        val networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                robotNetwork = network
+                println("Red del robot encontrada y guardada")
+            }
+
+            override fun onLost(network: Network) {
+                if (robotNetwork == network) {
+                    robotNetwork = null
+                    println("Conexion con red del robot perdida")
+                }
+            }
+        }
+
+        connectivityManager.requestNetwork(networkRequest, networkCallback)
+    }
 }
 
 @Composable
 fun PantallaControl() {
-    // CAMBIA ESTA IP A LA DE TU RASPBERRY PI
     val ipRaspberry = "10.42.0.1"
     val puerto = "5000"
     var respuesta by remember { mutableStateOf("Sin conexión") }
     var conectado by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
+    //Version 2 Actualizacion: Funcion de peticion modificada para usar red especifica del robot
     fun hacerPeticion(endpoint: String) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val url = URL("http://$ipRaspberry:$puerto$endpoint")
-                val connection = url.openConnection() as HttpURLConnection
+
+                //Version 2 Actualizacion: Obtener MainActivity para acceder a robotNetwork
+                val activity = context as? MainActivity
+
+                //Version 2 Actualizacion: Usar red del robot si esta disponible, sino usar conexion normal
+                val connection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && activity?.robotNetwork != null) {
+                    activity.robotNetwork!!.openConnection(url) as HttpURLConnection
+                } else {
+                    url.openConnection() as HttpURLConnection
+                }
+
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 3000
 
@@ -56,7 +112,6 @@ fun PantallaControl() {
                     respuesta = response
                     conectado = true
 
-                    // Mostrar mensaje específico según el endpoint
                     val mensaje = when(endpoint) {
                         "/" -> "Conectado al servidor"
                         "/hola" -> "Mensaje recibido"
@@ -90,7 +145,6 @@ fun PantallaControl() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Título
             Text(
                 text = "Control Raspberry Pi",
                 fontSize = 24.sp,
@@ -98,14 +152,12 @@ fun PantallaControl() {
                 modifier = Modifier.padding(bottom = 10.dp)
             )
 
-            // IP del servidor
             Text(
                 text = "Servidor: $ipRaspberry:$puerto",
                 color = Color.Gray,
                 modifier = Modifier.padding(bottom = 20.dp)
             )
 
-            // Estado de conexión
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -122,7 +174,6 @@ fun PantallaControl() {
                 )
             }
 
-            // Botones
             Button(
                 onClick = { hacerPeticion("/") },
                 modifier = Modifier
@@ -162,7 +213,6 @@ fun PantallaControl() {
                 Text("LED OFF", color = Color.White)
             }
 
-            // Respuesta del servidor
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
