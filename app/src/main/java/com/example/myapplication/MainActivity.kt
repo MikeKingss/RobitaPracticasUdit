@@ -21,8 +21,6 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
-
-//Version 2 Actualizacion: Para poder utilizar datos moviles mientras se esta conectado al Raspberry Pi //
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
@@ -32,30 +30,26 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 
 class MainActivity : ComponentActivity() {
-    //Version 2 Actualizacion: Variable para guardar referencia a la red WiFi del robot
     var robotNetwork: Network? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        //Version 2 Actualizacion: Inicializar conexion a red del robot (Android 6+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             conectarRedRobot(this)
         }
 
         setContent {
             MaterialTheme {
-                PantallaControl()
+                PantallaMicelio()
             }
         }
     }
 
-    //Version 2 Actualizacion: Funcion para detectar y conectar a la red WiFi del robot
     @RequiresApi(Build.VERSION_CODES.M)
     fun conectarRedRobot(context: Context) {
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-        // Solicitar red WiFi sin requerir internet
         val networkRequest = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -79,24 +73,30 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+data class SensorData(
+    val temperature: Int = 0,
+    val humidity: Int = 0,
+    val co2: Int = 0,
+    val heatOn: Boolean = false,
+    val humidifierOn: Boolean = false,
+    val fanOn: Boolean = false
+)
+
 @Composable
-fun PantallaControl() {
-    val ipRaspberry = "10.42.0.1"
+fun PantallaMicelio() {
+    val ipRaspberry = "10.129.40.199"
     val puerto = "5000"
-    var respuesta by remember { mutableStateOf("Sin conexión") }
+    var sensorData by remember { mutableStateOf(SensorData()) }
     var conectado by remember { mutableStateOf(false) }
+    var ultimaActualizacion by remember { mutableStateOf("Nunca") }
     val context = LocalContext.current
 
-    //Version 2 Actualizacion: Funcion de peticion modificada para usar red especifica del robot
-    fun hacerPeticion(endpoint: String) {
+    fun obtenerDatos() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val url = URL("http://$ipRaspberry:$puerto$endpoint")
-
-                //Version 2 Actualizacion: Obtener MainActivity para acceder a robotNetwork
+                val url = URL("http://$ipRaspberry:$puerto/api/sensors/summary")
                 val activity = context as? MainActivity
 
-                //Version 2 Actualizacion: Usar red del robot si esta disponible, sino usar conexion normal
                 val connection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && activity?.robotNetwork != null) {
                     activity.robotNetwork!!.openConnection(url) as HttpURLConnection
                 } else {
@@ -107,30 +107,38 @@ fun PantallaControl() {
                 connection.connectTimeout = 3000
 
                 val response = connection.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(response)
 
                 withContext(Dispatchers.Main) {
-                    respuesta = response
+                    sensorData = SensorData(
+                        temperature = json.getInt("temperature"),
+                        humidity = json.getInt("humidity"),
+                        co2 = json.getInt("CO2"),
+                        heatOn = json.getJSONObject("actuators").getBoolean("heat"),
+                        humidifierOn = json.getJSONObject("actuators").getBoolean("humidifier"),
+                        fanOn = json.getJSONObject("actuators").getBoolean("fan")
+                    )
                     conectado = true
-
-                    val mensaje = when(endpoint) {
-                        "/" -> "Conectado al servidor"
-                        "/hola" -> "Mensaje recibido"
-                        "/led/on" -> "LED Encendido"
-                        "/led/off" -> "LED Apagado"
-                        else -> "Comando enviado"
-                    }
-                    Toast.makeText(context, mensaje, Toast.LENGTH_SHORT).show()
+                    ultimaActualizacion = java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date())
+                    Toast.makeText(context, "Datos actualizados", Toast.LENGTH_SHORT).show()
                 }
 
                 connection.disconnect()
 
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    respuesta = "Error: ${e.message}"
                     conectado = false
-                    Toast.makeText(context, "Error de conexión", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+    }
+
+    // Auto-actualizar cada 5 segundos
+    LaunchedEffect(Unit) {
+        while (true) {
+            obtenerDatos()
+            kotlinx.coroutines.delay(5000)
         }
     }
 
@@ -142,22 +150,24 @@ fun PantallaControl() {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Header
             Text(
-                text = "Control Raspberry Pi",
-                fontSize = 24.sp,
+                text = "Sistema de Micelio",
+                fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 10.dp)
+                modifier = Modifier.padding(bottom = 5.dp)
             )
 
             Text(
-                text = "Servidor: $ipRaspberry:$puerto",
+                text = "Ultima actualizacion: $ultimaActualizacion",
                 color = Color.Gray,
+                fontSize = 12.sp,
                 modifier = Modifier.padding(bottom = 20.dp)
             )
 
+            // Estado de conexion
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -170,67 +180,142 @@ fun PantallaControl() {
                     text = if (conectado) "✓ Conectado" else "✗ Desconectado",
                     modifier = Modifier.padding(16.dp),
                     color = Color.White,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
                 )
             }
 
-            Button(
-                onClick = { hacerPeticion("/") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 5.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
-            ) {
-                Text("Conectar al Servidor", color = Color.White)
-            }
-
-            Button(
-                onClick = { hacerPeticion("/hola") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 5.dp)
-            ) {
-                Text("Enviar Saludo")
-            }
-
-            Button(
-                onClick = { hacerPeticion("/led/on") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 5.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
-            ) {
-                Text("LED ON", color = Color.White)
-            }
-
-            Button(
-                onClick = { hacerPeticion("/led/off") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 5.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336))
-            ) {
-                Text("LED OFF", color = Color.White)
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            Text(
-                text = "Respuesta del servidor:",
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 10.dp)
-            )
-
+            // Sensores
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 15.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
             ) {
-                Text(
-                    text = respuesta,
-                    modifier = Modifier.padding(16.dp),
-                    color = Color.DarkGray
-                )
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text(
+                        text = "Sensores",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        modifier = Modifier.padding(bottom = 15.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text("Temperatura", color = Color.Gray, fontSize = 14.sp)
+                            Text(
+                                "${sensorData.temperature}°C",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 24.sp,
+                                color = Color(0xFFE91E63)
+                            )
+                        }
+
+                        Column {
+                            Text("Humedad", color = Color.Gray, fontSize = 14.sp)
+                            Text(
+                                "${sensorData.humidity}%",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 24.sp,
+                                color = Color(0xFF2196F3)
+                            )
+                        }
+
+                        Column {
+                            Text("CO2", color = Color.Gray, fontSize = 14.sp)
+                            Text(
+                                "${sensorData.co2}",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 24.sp,
+                                color = Color(0xFF4CAF50)
+                            )
+                            Text("ppm", fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+                }
             }
+
+            // Actuadores
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 15.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text(
+                        text = "Actuadores",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        modifier = Modifier.padding(bottom = 15.dp)
+                    )
+
+                    ActuadorRow("Calentador", sensorData.heatOn, Color(0xFFFF5722))
+                    ActuadorRow("Humidificador", sensorData.humidifierOn, Color(0xFF2196F3))
+                    ActuadorRow("Ventilador", sensorData.fanOn, Color(0xFF4CAF50))
+                }
+            }
+
+            // Boton actualizar manual
+            Button(
+                onClick = { obtenerDatos() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
+            ) {
+                Text("Actualizar Datos", color = Color.White, fontSize = 16.sp)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Botones de navegacion (proximamente)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                OutlinedButton(
+                    onClick = { Toast.makeText(context, "Proximamente", Toast.LENGTH_SHORT).show() },
+                    modifier = Modifier.weight(1f).padding(horizontal = 5.dp)
+                ) {
+                    Text("Diagnostico", fontSize = 12.sp)
+                }
+
+                OutlinedButton(
+                    onClick = { Toast.makeText(context, "Proximamente", Toast.LENGTH_SHORT).show() },
+                    modifier = Modifier.weight(1f).padding(horizontal = 5.dp)
+                ) {
+                    Text("Config", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ActuadorRow(nombre: String, activo: Boolean, color: Color) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(nombre, fontSize = 16.sp)
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (activo) color else Color.LightGray
+            )
+        ) {
+            Text(
+                text = if (activo) "ON" else "OFF",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
